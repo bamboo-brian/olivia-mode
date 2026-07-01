@@ -1,5 +1,7 @@
 # Olivia Mode
 
+Named after the very best question asker I know.
+
 A Claude Code / Codex **skill** for interviewing you about a plan or design until
 you reach a shared understanding — without dumping a hundred questions into the
 chat.
@@ -12,11 +14,13 @@ resolving questions you've already answered elsewhere.
 
 ## How it works
 
-1. The agent authors `./olivia-session.json` — the decision tree
-   (see [`references/tree-schema.md`](references/tree-schema.md)).
+1. The agent checks for an existing interview for your repo and, for a new one,
+   authors the decision tree (see
+   [`references/tree-schema.md`](references/tree-schema.md)) into a session file
+   in the central store.
 2. It runs the server in the background:
    ```
-   python3 ~/.claude/skills/olivia-mode/scripts/olivia_server.py --file ./olivia-session.json --port 0
+   python3 ~/.claude/skills/olivia-mode/scripts/olivia_server.py serve --file <path> --cwd "$PWD" --port 0
    ```
 3. You open the printed `http://127.0.0.1:PORT/` URL and answer questions one at
    a time — picking a recommended answer or writing your own, with an optional
@@ -25,12 +29,28 @@ resolving questions you've already answered elsewhere.
    makes changes through HTTP control endpoints (`/api/add`, `/api/resolve`,
    `/api/update`) so the two never race on the file.
 5. Click **Done** to end the session and shut the server down. Your answers are
-   in `olivia-session.json`.
+   saved in the session file.
+
+## Where sessions are stored
+
+Sessions live in a central directory — `~/.olivia-mode/sessions/` by default
+(override the root with the `OLIVIA_MODE_HOME` environment variable), **not** in
+your repo. Each file is named after the working directory it belongs to and also
+records that directory in a `cwd` field, so the interview for a given project can
+be found again later.
 
 ## Resuming
 
-Point the agent at an existing `olivia-session.json` to pick up where you left
-off — only unanswered questions are offered.
+Because sessions are keyed by working directory, a later run picks up where you
+left off automatically — even in a brand-new Claude/Codex session. The agent
+discovers existing interviews for the current directory with:
+
+```
+python3 ~/.claude/skills/olivia-mode/scripts/olivia_server.py sessions --cwd "$PWD"
+```
+
+and relaunches the server on the unfinished one. Only unanswered questions are
+offered.
 
 ## Requirements
 
@@ -40,6 +60,9 @@ Python 3 standard library only. No dependencies to install.
 
 ```
 SKILL.md                    agent instructions (the skill entry point)
-scripts/olivia_server.py    the web server / runtime
+scripts/olivia_server.py    the web server / runtime + `sessions` discovery
 references/tree-schema.md    session JSON format + worked example
 ```
+
+Session files are written to `~/.olivia-mode/sessions/` (see
+[Where sessions are stored](#where-sessions-are-stored)), outside this repo.

@@ -9,16 +9,23 @@ branches and depth-first traversal simple.
 ```json
 {
   "title": "Short name of the plan under discussion",
+  "cwd": "/Users/you/repos/project",
   "created": "2026-06-30T12:00:00+00:00",
+  "updated": "2026-06-30T12:34:00+00:00",
   "questions": [ /* Question objects */ ]
 }
 ```
 
-| Field       | Type   | Notes                                          |
-| ----------- | ------ | ---------------------------------------------- |
-| `title`     | string | Shown as the page heading.                     |
-| `created`   | string | ISO-8601. The server fills this if omitted.    |
-| `questions` | array  | Flat list; nesting is expressed via `parentId`.|
+| Field       | Type   | Notes                                                           |
+| ----------- | ------ | --------------------------------------------------------------- |
+| `title`     | string | Shown as the page heading.                                      |
+| `cwd`       | string | Absolute working directory this session belongs to. Ties the session to its repo for discovery/resume; the server backfills it from `--cwd` if omitted. |
+| `created`   | string | ISO-8601. The server fills this if omitted.                     |
+| `updated`   | string | ISO-8601. The server re-stamps this on every write.             |
+| `questions` | array  | Flat list; nesting is expressed via `parentId`.                 |
+
+Sessions are stored in `~/.olivia-mode/sessions/` (root overridable via
+`OLIVIA_MODE_HOME`), one file per interview, named after the `cwd`.
 
 ## Question object
 
@@ -79,6 +86,7 @@ Two roots; the first has a branch that only appears if the user picks `r1`.
 ```json
 {
   "title": "New caching layer",
+  "cwd": "/Users/you/repos/project",
   "created": "2026-06-30T12:00:00+00:00",
   "questions": [
     {

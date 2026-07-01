@@ -17,24 +17,39 @@ instead of asking it.**
 
 ## The pieces
 
-- `scripts/olivia_server.py` — a stdlib-only web server (the whole runtime).
-- `references/tree-schema.md` — the `olivia-session.json` format. **Read this
-  before authoring a tree.**
-- `./olivia-session.json` — the session file, written in the user's current
-  working directory. Also the resume target.
+- `scripts/olivia_server.py` — a stdlib-only web server (the whole runtime),
+  plus a `sessions` discovery command.
+- `references/tree-schema.md` — the session JSON format. **Read this before
+  authoring a tree.**
+- `~/.olivia-mode/sessions/` — the **known directory** where every session file
+  lives (override the root with `OLIVIA_MODE_HOME`). Each file's name encodes the
+  working directory it belongs to, and the exact directory is also stored in the
+  JSON's `cwd` field — that pairing is what lets a *later* Claude/Codex session
+  find and resume this interview. You never pick this path by hand; the `sessions`
+  command hands you the right one.
 
 Invoke the script by its **absolute skill path** — your CWD is the user's repo,
-not the skill directory:
-
-```
-python3 ~/.claude/skills/olivia-mode/scripts/olivia_server.py --file ./olivia-session.json --port 0
-```
+not the skill directory.
 
 ## Workflow
 
-### 1. Understand
+### 1. Understand & check for an existing session
 Work out what plan or design you are interviewing about, from the user's request
 plus codebase exploration. Answer anything the code can answer yourself.
+
+Then ask whether an interview already exists for this repo:
+
+```
+python3 ~/.claude/skills/olivia-mode/scripts/olivia_server.py sessions --cwd "$PWD"
+```
+
+This prints JSON: `matches` (sessions whose stored `cwd` is this directory, each
+with `path`, `title`, `answered`/`pending`/`complete` counts) and `newPath` (the
+file to use for a fresh session).
+
+- If a match is **not `complete`** and fits the current request, offer to
+  **resume** it — skip to step 6 (Resume) with its `path`.
+- Otherwise start fresh: use `newPath` as the file for the new session.
 
 ### 2. Build the tree (new session only)
 Generate as many questions as it takes to reach full understanding. For each:
@@ -43,23 +58,26 @@ Generate as many questions as it takes to reach full understanding. For each:
   add them as branch children keyed to that recommendation (`parentId` +
   `parentAnswer`). This is what makes it a decision tree, not a flat list.
 
-Write the tree to `./olivia-session.json` following `references/tree-schema.md`.
+Write the tree to the `newPath` from step 1, following `references/tree-schema.md`.
+Include `"cwd": "<absolute working directory>"` at the top level so the session
+stays tied to this repo.
 
 ### 3. Launch the server with the `Monitor` tool
 The server is a long-running process that emits one `OLIVIA_EVENT` line per
 user action. Stream those events with the **`Monitor` tool** — each stdout line
 becomes a notification you receive while you keep working. Run the launch
 command as the monitor's `command` with `persistent: true` (the watch ends by
-itself when the user clicks Done and the server exits):
+itself when the user clicks Done and the server exits). Use the session's
+absolute `path` (the `newPath` for a new session, or a match's `path` to resume):
 
-- **command:** `python3 ~/.claude/skills/olivia-mode/scripts/olivia_server.py --file ./olivia-session.json --port 0 2>&1`
+- **command:** `python3 ~/.claude/skills/olivia-mode/scripts/olivia_server.py serve --file <path> --cwd "$PWD" --port 0 2>&1`
 - **persistent:** `true`
 - **description:** e.g. `olivia interview events`
 
 The first event you get back is:
 
 ```
-OLIVIA_EVENT {"type":"ready","url":"http://127.0.0.1:PORT/","file":"...","questions":N}
+OLIVIA_EVENT {"type":"ready","url":"http://127.0.0.1:PORT/","file":"...","cwd":"...","questions":N}
 ```
 
 Give the user the `url` and tell them to open it and start answering.
@@ -86,19 +104,21 @@ Apply every change **through the HTTP API with `curl`** — see below. Between
 events you can do other work; the next notification will bring you back.
 
 > **Race-avoidance rule:** while the server is running it is the *only* writer of
-> `olivia-session.json`. **Never edit the file directly during a live session.**
+> the session file. **Never edit the file directly during a live session.**
 > Direct edits are fine only before launch or after shutdown.
 
 ### 5. Finish
 When you see `OLIVIA_EVENT {"type":"done"}` (the user clicked **Done**) the
-server exits and the monitor ends. Read the final
-`./olivia-session.json` and use the fully-answered tree to inform the work the
+server exits and the monitor ends. Read the final session file (the `file` path
+from the `ready` event) and use the fully-answered tree to inform the work the
 interview was for. Hand the answered tree back to the user.
 
 ### 6. Resume
-If the user points at an existing `olivia-session.json`, **skip step 2** and just
-relaunch the server on that file. The index shows answered/pending status and
-offers only pending questions.
+To resume, **skip step 2** and relaunch `serve` on an existing session's `path`
+(from the `sessions` discovery in step 1, or one the user names). The index shows
+answered/pending status and offers only pending questions. Because sessions live
+in the central `~/.olivia-mode/sessions/` directory keyed by `cwd`, this works
+even in a brand-new Claude session with no memory of the earlier interview.
 
 ## Agent control endpoints (via `curl`)
 
@@ -138,7 +158,7 @@ curl -s -X POST "$URL/api/update" -H 'Content-Type: application/json' \
 
 | Event     | Meaning                                             |
 | --------- | --------------------------------------------------- |
-| `ready`   | Server up; carries `url`, `file`, `questions`.      |
+| `ready`   | Server up; carries `url`, `file`, `cwd`, `questions`.|
 | `answer`  | User answered `qid`; carries choice, note, `next`.  |
 | `added`   | You added questions; carries new `ids`.             |
 | `resolve` | A question was resolved.                            |
