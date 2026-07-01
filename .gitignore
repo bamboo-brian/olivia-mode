@@ -1,0 +1,13 @@
+# Session files produced by the skill at runtime
+olivia-session.json
+*.olivia-session.json
+
+# Atomic-write temp files
+.olivia-*.tmp
+
+# Python
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store
