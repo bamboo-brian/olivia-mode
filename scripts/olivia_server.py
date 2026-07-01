@@ -653,6 +653,7 @@ def render_index(store, complete=False):
     parts = ['<main class="wrap">']
     parts.append('<header class="mast">')
     parts.append('<p class="eyebrow">Olivia Mode &middot; Interview</p>')
+    parts.append('<p class="lead">hi!</p>')
     parts.append('<h1 class="mast__title">%s</h1>' % esc(data["title"]))
     if total:
         parts.append(
