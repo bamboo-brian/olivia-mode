@@ -45,9 +45,18 @@ Generate as many questions as it takes to reach full understanding. For each:
 
 Write the tree to `./olivia-session.json` following `references/tree-schema.md`.
 
-### 3. Launch the server (in the background)
-Run the command above with `run_in_background: true`. Read the first event from
-its output:
+### 3. Launch the server with the `Monitor` tool
+The server is a long-running process that emits one `OLIVIA_EVENT` line per
+user action. Stream those events with the **`Monitor` tool** — each stdout line
+becomes a notification you receive while you keep working. Run the launch
+command as the monitor's `command` with `persistent: true` (the watch ends by
+itself when the user clicks Done and the server exits):
+
+- **command:** `python3 ~/.claude/skills/olivia-mode/scripts/olivia_server.py --file ./olivia-session.json --port 0 2>&1`
+- **persistent:** `true`
+- **description:** e.g. `olivia interview events`
+
+The first event you get back is:
 
 ```
 OLIVIA_EVENT {"type":"ready","url":"http://127.0.0.1:PORT/","file":"...","questions":N}
@@ -55,9 +64,15 @@ OLIVIA_EVENT {"type":"ready","url":"http://127.0.0.1:PORT/","file":"...","questi
 
 Give the user the `url` and tell them to open it and start answering.
 
-### 4. Monitor and react
-Poll the background process output (`BashOutput`). Each user action prints one
-line:
+> **Do NOT wait with `sleep`.** Never poll for events with `sleep 45; tail ...`
+> or chained sleeps — the harness blocks that. The `Monitor` tool delivers each
+> event as a notification; just react when one arrives. (If you ever need to
+> wait for a single condition instead, use a Bash `run_in_background` command
+> that exits when the condition is true, e.g. `until grep -q done log; do sleep 1; done`.)
+
+### 4. React to events
+Notifications arrive on their own schedule (they are events, **not** user
+replies). Each user action prints one line:
 
 ```
 OLIVIA_EVENT {"type":"answer","qid":"q3","choiceId":"r1","custom":"","note":"...","next":"q4"}
@@ -67,8 +82,8 @@ On each `answer`, decide whether it:
 - **raises new follow-ups** → add them, or
 - **makes a pending question moot** (already answered here) → resolve it.
 
-Apply every change **through the HTTP API with `curl`** — see below. You are
-turn-based, so poll between the user's actions rather than expecting a stream.
+Apply every change **through the HTTP API with `curl`** — see below. Between
+events you can do other work; the next notification will bring you back.
 
 > **Race-avoidance rule:** while the server is running it is the *only* writer of
 > `olivia-session.json`. **Never edit the file directly during a live session.**
@@ -76,7 +91,7 @@ turn-based, so poll between the user's actions rather than expecting a stream.
 
 ### 5. Finish
 When you see `OLIVIA_EVENT {"type":"done"}` (the user clicked **Done**) the
-background process exits and you are notified. Read the final
+server exits and the monitor ends. Read the final
 `./olivia-session.json` and use the fully-answered tree to inform the work the
 interview was for. Hand the answered tree back to the user.
 
