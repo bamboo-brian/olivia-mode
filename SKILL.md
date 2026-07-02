@@ -57,10 +57,17 @@ Generate as many questions as it takes to reach full understanding. For each:
 - Anticipate the **follow-up questions** each recommended answer would raise, and
   add them as branch children keyed to that recommendation (`parentId` +
   `parentAnswer`). This is what makes it a decision tree, not a flat list.
+- As you write, collect a **`references`** glossary. Add an entry for **any
+  identifier, term, or phrase** you use in a question or recommendation that the
+  user might not have memorized — `R-18`, `S5`, `Decision #6`, a service/module
+  name, a domain term. The web UI turns each occurrence into a hover tooltip, so
+  the user never has to go hunting for what a shorthand means. Err on the side of
+  adding one: a reference with no matching text is harmless.
 
 Write the tree to the `newPath` from step 1, following `references/tree-schema.md`.
 Include `"cwd": "<absolute working directory>"` at the top level so the session
-stays tied to this repo.
+stays tied to this repo, and a top-level `"references"` object with any glossary
+entries.
 
 ### 3. Launch the server with the `Monitor` tool
 The server is a long-running process that emits one `OLIVIA_EVENT` line per
@@ -152,6 +159,15 @@ curl -s -X POST "$URL/api/update" -H 'Content-Type: application/json' \
   -d '{"id":"q2","text":"revised text","recommendations":[...]}'
 ```
 
+**Add references** — `POST /api/references`. Merge new glossary entries (e.g.
+when a follow-up you just added introduces a fresh term). Send `{"references":
+{...}}` mapping identifier → description; existing entries are kept:
+
+```bash
+curl -s -X POST "$URL/api/references" -H 'Content-Type: application/json' \
+  -d '{"references":{"S5":"Snapshot stage 5","Decision #6":"Whether runs fan out per-client"}}'
+```
+
 **Read current state** — `GET /api/state` returns the full tree JSON.
 
 ## Event reference
@@ -161,6 +177,7 @@ curl -s -X POST "$URL/api/update" -H 'Content-Type: application/json' \
 | `ready`   | Server up; carries `url`, `file`, `cwd`, `questions`.|
 | `answer`  | User answered `qid`; carries choice, note, `next`.  |
 | `added`   | You added questions; carries new `ids`.             |
+| `references` | You added glossary entries; carries the `ids`.   |
 | `resolve` | A question was resolved.                            |
 | `updated` | A question was edited.                              |
 | `done`    | Session over; server is shutting down.              |

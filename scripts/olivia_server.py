@@ -119,6 +119,7 @@ class SessionStore:
                 "title": default_title or "Untitled plan",
                 "created": _now_iso(),
                 "cwd": self.cwd,
+                "references": {},
                 "questions": [],
             }
             self._persist()
@@ -132,6 +133,7 @@ class SessionStore:
         if not self.data.get("cwd"):
             self.data["cwd"] = self.cwd
         self.data.setdefault("updated", self.data["created"])
+        self.data.setdefault("references", {})
         self.data.setdefault("questions", [])
         for q in self.data["questions"]:
             q.setdefault("parentId", None)
@@ -214,6 +216,10 @@ class SessionStore:
     def snapshot(self):
         with self.lock:
             return json.loads(json.dumps(self.data))
+
+    def references(self):
+        with self.lock:
+            return dict(self.data.get("references", {}))
 
     def get(self, qid):
         with self.lock:
@@ -338,6 +344,22 @@ class SessionStore:
             self._persist()
         emit("updated", qid=qid)
         return True
+
+    def set_references(self, mapping):
+        """Merge identifier -> description entries into the glossary."""
+        if not isinstance(mapping, dict):
+            return []
+        added = []
+        with self.lock:
+            refs = self.data.setdefault("references", {})
+            for key, desc in mapping.items():
+                if not key:
+                    continue
+                refs[str(key)] = "" if desc is None else str(desc)
+                added.append(str(key))
+            self._persist()
+        emit("references", ids=added)
+        return added
 
 
 # --------------------------------------------------------------------------- #
@@ -516,6 +538,22 @@ textarea:focus, input[type=text]:focus{{border-color:var(--olivia); outline:none
   border:1px solid var(--line); border-radius:3px; padding:.05em .35em;
 }}
 
+/* --- references (glossary tooltips) --- */
+.ref{{
+  text-decoration:underline dotted var(--olivia); text-underline-offset:3px;
+  text-decoration-thickness:1px; cursor:help;
+}}
+.ref:hover, .ref:focus-visible{{color:var(--olivia)}}
+.ref-pop{{
+  position:absolute; z-index:50; max-width:22rem; display:none;
+  background:var(--paper); color:var(--ink);
+  border:1px solid var(--line); border-left:3px solid var(--olivia);
+  padding:.6rem .75rem; font-family:var(--sans); font-size:.86rem; line-height:1.45;
+  white-space:normal; box-shadow:0 6px 22px rgba(22,33,29,.16);
+}}
+.ref-pop.is-open{{display:block}}
+.ref-pop code{{font-family:var(--mono); font-size:.85em; background:var(--paper-2); padding:.05em .3em}}
+
 @media (prefers-reduced-motion: no-preference){{
   .ask, .opt, .earlier{{animation:rise .5s cubic-bezier(.2,.7,.2,1) both}}
   @keyframes rise{{from{{opacity:0; transform:translateY(9px)}} to{{opacity:1; transform:none}}}}
@@ -531,6 +569,7 @@ textarea:focus, input[type=text]:focus{{border-color:var(--olivia); outline:none
 }}
 </style></head><body>
 {body}
+{ref_js}
 </body></html>
 """
 
@@ -543,7 +582,7 @@ KEYBOARD_JS = """<script>
   var form = document.querySelector('form.answers');
   if(!form) return;
   var radios = [].slice.call(form.querySelectorAll('input[name="choiceId"]'));
-  var custom = form.querySelector('input[name="customText"]');
+  var custom = form.querySelector('[name="customText"]');
   function typing(el){
     return el && (el.tagName === 'TEXTAREA' ||
                   (el.tagName === 'INPUT' && el.type === 'text'));
@@ -601,8 +640,53 @@ KEYBOARD_JS = """<script>
 </script>"""
 
 
+# Reference tooltips (progressive enhancement -- the dotted underline already
+# signals a reference without JS). Runs on every page; a no-op when no .ref
+# elements are present. One reusable popover, shown on hover and keyboard focus,
+# positioned above the reference and clamped to the viewport.
+REF_JS = """<script>
+(function(){
+  var refs = [].slice.call(document.querySelectorAll('.ref'));
+  if(!refs.length) return;
+  var pop = document.createElement('div');
+  pop.className = 'ref-pop';
+  document.body.appendChild(pop);
+  var active = null;
+  function hide(){ pop.classList.remove('is-open'); active = null; }
+  function show(el){
+    var desc = el.getAttribute('data-desc');
+    if(!desc){ return; }
+    active = el;
+    pop.textContent = desc;
+    pop.classList.add('is-open');
+    var r = el.getBoundingClientRect();
+    var pw = pop.offsetWidth, ph = pop.offsetHeight;
+    var pad = 8;
+    var left = window.scrollX + r.left;
+    var maxLeft = window.scrollX + document.documentElement.clientWidth - pw - pad;
+    if(left > maxLeft){ left = maxLeft; }
+    if(left < window.scrollX + pad){ left = window.scrollX + pad; }
+    var top = window.scrollY + r.top - ph - 6;
+    if(top < window.scrollY + pad){ top = window.scrollY + r.bottom + 6; }
+    pop.style.left = left + 'px';
+    pop.style.top = top + 'px';
+  }
+  refs.forEach(function(el){
+    el.addEventListener('mouseenter', function(){ show(el); });
+    el.addEventListener('mouseleave', function(){ if(active === el) hide(); });
+    el.addEventListener('focus', function(){ show(el); });
+    el.addEventListener('blur', function(){ if(active === el) hide(); });
+  });
+  document.addEventListener('keydown', function(e){
+    if(e.key === 'Escape') hide();
+  });
+  window.addEventListener('scroll', hide, true);
+})();
+</script>"""
+
+
 def render(title, body):
-    return PAGE.format(title=html.escape(title), body=body)
+    return PAGE.format(title=html.escape(title), body=body, ref_js=REF_JS)
 
 
 def render_notice(heading, message, link_href: "Optional[str]" = "/",
@@ -626,6 +710,37 @@ def esc(s):
     return html.escape(s or "")
 
 
+def annotate(text, references):
+    """HTML-escape `text`, wrapping any reference key in a tooltip span.
+
+    `references` maps identifier -> description. Any whole-token occurrence of a
+    key becomes `<span class="ref" ... data-desc="...">key</span>`, hoverable in
+    the UI. Keys are matched longest-first so a longer phrase (e.g. "Decision #6")
+    wins over a shorter overlapping key, and boundary guards keep "R-18" from
+    matching inside "R-180". A single pass avoids nested/double wrapping.
+    """
+    escaped = esc(text)
+    if not references or not escaped:
+        return escaped
+    # Map escaped-key -> original description (text is already escaped).
+    by_escaped = {}
+    for key, desc in references.items():
+        if key:
+            by_escaped[esc(key)] = desc
+    keys = sorted(by_escaped, key=len, reverse=True)
+    if not keys:
+        return escaped
+    pattern = re.compile(
+        r"(?<!\w)(?:%s)(?!\w)" % "|".join(re.escape(k) for k in keys))
+
+    def repl(m):
+        matched = m.group(0)
+        return ('<span class="ref" tabindex="0" data-desc="%s">%s</span>'
+                % (esc(by_escaped.get(matched, "")), matched))
+
+    return pattern.sub(repl, escaped)
+
+
 def _choice_label(q):
     """Human label for the answer chosen on q, or None if unanswered."""
     ans = q.get("answer") or {}
@@ -642,6 +757,7 @@ def _choice_label(q):
 
 def render_index(store, complete=False):
     data = store.snapshot()
+    refs = data.get("references", {})
     ordered = store.ordered()
     nxt = store.next_pending()
 
@@ -690,7 +806,7 @@ def render_index(store, complete=False):
                          '<span class="node__id">%s</span>%s%s</a>'
                          '<span class="node__tag">%s</span>'
                          % (esc(q["id"]), esc(q["id"]), branch,
-                            esc(q["text"]), esc(tag)))
+                            annotate(q["text"], refs), esc(tag)))
             label = _choice_label(q)
             if label and q["status"] in ("answered", "resolved"):
                 parts.append('<p class="node__said">you said: <b>%s</b></p>' % esc(label))
@@ -708,7 +824,9 @@ def render_question(store, qid):
     q = store.get(qid)
     if q is None:
         return None
-    title = store.snapshot()["title"]
+    snap = store.snapshot()
+    title = snap["title"]
+    refs = snap.get("references", {})
     state_tag = STATUS_TAG.get(q["status"], ("awaiting", ""))[0]
 
     parts = ['<main class="wrap">']
@@ -721,14 +839,14 @@ def render_question(store, qid):
     if parent:
         parts.append('<div class="earlier">')
         parts.append('<p class="eyebrow">Earlier</p>')
-        parts.append('<p class="earlier__q">%s</p>' % esc(parent["text"]))
+        parts.append('<p class="earlier__q">%s</p>' % annotate(parent["text"], refs))
         label = _choice_label(parent)
         if label:
             parts.append('<p class="earlier__a">you said: <b>%s</b></p>' % esc(label))
         parts.append('</div>')
 
     parts.append('<p class="eyebrow">Olivia asks</p>')
-    parts.append('<h1 class="ask">%s</h1>' % esc(q["text"]))
+    parts.append('<h1 class="ask">%s</h1>' % annotate(q["text"], refs))
     if q["status"] != "pending":
         parts.append('<p class="revise">You&rsquo;ve answered this &mdash; revise it below if you like.</p>')
 
@@ -745,9 +863,9 @@ def render_question(store, qid):
         parts.append('<input type="radio" name="choiceId" value="%s" %s>'
                      % (esc(r["id"]), checked))
         parts.append('<span class="opt__dot"></span>')
-        parts.append('<span class="opt__label">%s</span>' % esc(r["label"]))
+        parts.append('<span class="opt__label">%s</span>' % annotate(r["label"], refs))
         if r.get("rationale"):
-            parts.append('<p class="opt__why">%s</p>' % esc(r["rationale"]))
+            parts.append('<p class="opt__why">%s</p>' % annotate(r["rationale"], refs))
         parts.append('<span class="opt__note">'
                      '<label class="field">Note (optional)</label>'
                      '<textarea name="note_%s" rows="2" '
@@ -767,7 +885,7 @@ def render_question(store, qid):
     parts.append('<span class="opt__label">In my own words</span>')
     parts.append('<span class="opt__note">'
                  '<label class="field">Your answer</label>'
-                 '<input type="text" name="customText" placeholder="Type your answer" value="%s">'
+                 '<textarea name="customText" rows="3" placeholder="Type your answer">%s</textarea>'
                  '<label class="field" style="margin-top:.7rem">Note (optional)</label>'
                  '<textarea name="note_custom" rows="2" placeholder="Anything to add?">%s</textarea>'
                  '</span>' % (esc(custom_text), esc(custom_note)))
@@ -917,6 +1035,15 @@ class Handler(BaseHTTPRequestHandler):
                 items = [data]  # allow a single question object
             created = store.add(items or [])
             self._send_json({"ok": True, "ids": created})
+            return
+
+        if path == "/api/references":
+            data = self._read_json()
+            refs = data.get("references") if isinstance(data, dict) else None
+            if refs is None and isinstance(data, dict):
+                refs = data  # allow a bare {id: description} map
+            added = store.set_references(refs or {})
+            self._send_json({"ok": True, "ids": added})
             return
 
         if path == "/api/resolve":
