@@ -28,8 +28,9 @@ instead of asking it.**
   find and resume this interview. You never pick this path by hand; the `sessions`
   command hands you the right one.
 
-Invoke the script by its **absolute skill path** — your CWD is the user's repo,
-not the skill directory.
+Invoke the script by its **absolute plugin path** using `${CLAUDE_PLUGIN_ROOT}`
+(the plugin's install directory, substituted for you) — your CWD is the user's
+repo, not the plugin directory.
 
 ## Workflow
 
@@ -40,7 +41,7 @@ plus codebase exploration. Answer anything the code can answer yourself.
 Then ask whether an interview already exists for this repo:
 
 ```
-python3 ~/.claude/skills/olivia-mode/scripts/olivia_server.py sessions --cwd "$PWD"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/olivia_server.py" sessions --cwd "$PWD"
 ```
 
 This prints JSON: `matches` (sessions whose stored `cwd` is this directory, each
@@ -77,7 +78,7 @@ command as the monitor's `command` with `persistent: true` (the watch ends by
 itself when the user clicks Done and the server exits). Use the session's
 absolute `path` (the `newPath` for a new session, or a match's `path` to resume):
 
-- **command:** `python3 ~/.claude/skills/olivia-mode/scripts/olivia_server.py serve --file <path> --cwd "$PWD" --port 0 2>&1`
+- **command:** `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/olivia_server.py" serve --file <path> --cwd "$PWD" --port 0 2>&1`
 - **persistent:** `true`
 - **description:** e.g. `olivia interview events`
 

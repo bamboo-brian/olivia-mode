@@ -2,9 +2,9 @@
 
 Named after the very best question asker I know.
 
-A Claude Code / Codex **skill** for interviewing you about a plan or design until
-you reach a shared understanding — without dumping a hundred questions into the
-chat.
+A Claude Code **plugin** (a single skill) for interviewing you about a plan or
+design until you reach a shared understanding — without dumping a hundred
+questions into the chat.
 
 The agent builds a **branching decision tree** of questions (each with 1–2
 recommended answers and a rationale), then launches a tiny local web app you step
@@ -20,7 +20,7 @@ resolving questions you've already answered elsewhere.
    in the central store.
 2. It runs the server in the background:
    ```
-   python3 ~/.claude/skills/olivia-mode/scripts/olivia_server.py serve --file <path> --cwd "$PWD" --port 0
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/olivia_server.py" serve --file <path> --cwd "$PWD" --port 0
    ```
 3. You open the printed `http://127.0.0.1:PORT/` URL and answer questions one at
    a time — picking a recommended answer or writing your own, with an optional
@@ -46,7 +46,7 @@ left off automatically — even in a brand-new Claude/Codex session. The agent
 discovers existing interviews for the current directory with:
 
 ```
-python3 ~/.claude/skills/olivia-mode/scripts/olivia_server.py sessions --cwd "$PWD"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/olivia_server.py" sessions --cwd "$PWD"
 ```
 
 and relaunches the server on the unfinished one. Only unanswered questions are
