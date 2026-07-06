@@ -1,9 +1,17 @@
 {
   "name": "olivia-mode",
-  "description": "Interview the user relentlessly about a plan or design through a branching decision tree served in a local web app, until reaching shared understanding",
-  "version": "0.1.0",
+  "description": "Interview the user relentlessly about a plan or design through a branching decision tree served in a local web app, until reaching shared understanding. Ships a Planning Facilitator output style and a PreToolUse gate that blocks deliverable writes no completed interview authorizes.",
+  "version": "0.4.0",
   "author": {
     "name": "Brian Hill"
   },
-  "repository": "https://github.com/bamboo-brian/olivia-mode"
+  "repository": "https://github.com/bamboo-brian/olivia-mode",
+  "userConfig": {
+    "gated_projects": {
+      "type": "string",
+      "title": "Gated projects",
+      "description": "Absolute paths of projects where creating a markdown document requires a completed Olivia interview that declares it as a deliverable. Leave empty to disable the write gate everywhere.",
+      "multiple": true
+    }
+  }
 }

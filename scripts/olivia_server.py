@@ -18,9 +18,23 @@ session. Each session records the working directory it belongs to -- both encode
 into its filename and stored in the JSON -- so `sessions` discovery can match a
 repo to its interview.
 
+Each session also declares, in its top-level `deliverables` list, the paths or
+globs (relative to its cwd) of the documents the interview authorizes; the
+`authorize` command answers whether a given file is covered by a completed
+interview, and is what the PreToolUse gate (hooks/olivia_gate.py) calls.
+
+The write gate is opt-in per project through the plugin's `gated_projects`
+user config (set when enabling the plugin, or later via /plugin). The `gate`
+command reports whether a directory is gated; it reads the value from the
+CLAUDE_PLUGIN_OPTION_* environment (present in plugin subprocesses such as
+the PreToolUse hook) and falls back to `pluginConfigs` in Claude Code's user
+settings.json -- two read paths, one store.
+
 CLI:
     python3 olivia_server.py serve --file PATH [--cwd DIR] [--port 0] [--title "..."]
     python3 olivia_server.py sessions [--cwd DIR] [--all]
+    python3 olivia_server.py authorize --cwd DIR --file PATH
+    python3 olivia_server.py gate [--cwd DIR]
 
 Every notable event prints a single line to stdout, flushed immediately:
 
@@ -28,6 +42,7 @@ Every notable event prints a single line to stdout, flushed immediately:
 """
 
 import argparse
+import fnmatch
 import glob
 import html
 import json
@@ -119,6 +134,7 @@ class SessionStore:
                 "title": default_title or "Untitled plan",
                 "created": _now_iso(),
                 "cwd": self.cwd,
+                "deliverables": [],
                 "references": {},
                 "questions": [],
             }
@@ -133,6 +149,7 @@ class SessionStore:
         if not self.data.get("cwd"):
             self.data["cwd"] = self.cwd
         self.data.setdefault("updated", self.data["created"])
+        self.data.setdefault("deliverables", [])
         self.data.setdefault("references", {})
         self.data.setdefault("questions", [])
         for q in self.data["questions"]:
@@ -1087,11 +1104,27 @@ def _summarize(path):
         "cwd": store.data.get("cwd"),
         "created": store.data.get("created"),
         "updated": store.data.get("updated"),
+        "deliverables": store.data.get("deliverables", []),
         "total": total,
         "answered": answered,
         "pending": pending,
         "complete": pending == 0 and total > 0,
     }
+
+
+def _sessions_for_cwd(cwd):
+    """Summaries of every session whose stored cwd matches, newest first."""
+    stem = _slug(cwd)
+    directory = _sessions_dir()
+    paths = sorted(set(glob.glob(os.path.join(directory, stem + ".json")))
+                   | set(glob.glob(os.path.join(directory, stem + "-*.json"))))
+    matches = []
+    for p in paths:
+        summary = _summarize(p)
+        if summary and summary.get("cwd") == cwd:
+            matches.append(summary)
+    matches.sort(key=lambda m: m.get("updated") or "", reverse=True)
+    return matches
 
 
 def cmd_sessions(args):
@@ -1100,21 +1133,14 @@ def cmd_sessions(args):
     directory = _sessions_dir()
 
     if args.all:
-        paths = sorted(glob.glob(os.path.join(directory, "*.json")))
+        matches = []
+        for p in sorted(glob.glob(os.path.join(directory, "*.json"))):
+            summary = _summarize(p)
+            if summary is not None:
+                matches.append(summary)
+        matches.sort(key=lambda m: m.get("updated") or "", reverse=True)
     else:
-        # Fast path: glob the cwd slug; confirm by the stored cwd below.
-        stem = _slug(cwd)
-        paths = sorted(set(glob.glob(os.path.join(directory, stem + ".json")))
-                       | set(glob.glob(os.path.join(directory, stem + "-*.json"))))
-
-    matches = []
-    for p in paths:
-        summary = _summarize(p)
-        if summary is None:
-            continue
-        if args.all or summary.get("cwd") == cwd:
-            matches.append(summary)
-    matches.sort(key=lambda m: m.get("updated") or "", reverse=True)
+        matches = _sessions_for_cwd(cwd)
 
     print(json.dumps({
         "dir": directory,
@@ -1122,6 +1148,144 @@ def cmd_sessions(args):
         "matches": matches,
         "newPath": _new_path(cwd),
     }, indent=2))
+
+
+def _matches_deliverable(rel, patterns):
+    """Does the cwd-relative path `rel` match any declared deliverable glob?"""
+    rel = rel.replace(os.sep, "/")
+    for pattern in patterns or []:
+        pat = str(pattern).replace(os.sep, "/").lstrip("./")
+        if fnmatch.fnmatch(rel, pat):
+            return True
+    return False
+
+
+# Env var Claude Code exports to plugin subprocesses for the `gated_projects`
+# user config option. Casing of the key part is not documented, so try both.
+GATE_OPTION_ENVS = (
+    "CLAUDE_PLUGIN_OPTION_GATED_PROJECTS",
+    "CLAUDE_PLUGIN_OPTION_gated_projects",
+)
+
+
+def _canon(path):
+    return os.path.realpath(os.path.expanduser(str(path).strip()))
+
+
+def _parse_project_list(value):
+    """Normalize a gated_projects value of unknown shape into canonical paths.
+
+    Accepts a list of strings, a JSON-encoded list (how an array option may
+    arrive through the environment), a single path, or a newline/comma
+    delimited string.
+    """
+    if isinstance(value, list):
+        items = value
+    elif isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return []
+        try:
+            parsed = json.loads(text)
+        except ValueError:
+            parsed = None
+        if isinstance(parsed, list):
+            items = parsed
+        else:
+            items = re.split(r"[\n,]+", text)
+    else:
+        return []
+    return [_canon(p) for p in items if str(p).strip()]
+
+
+def _gated_projects():
+    """Projects opted into the write gate, from the plugin's user config.
+
+    The value lives in one place -- the olivia-mode plugin configuration in
+    Claude Code -- but is read two ways: plugin subprocesses (the PreToolUse
+    hook) get it as an environment variable; anything else (the agent running
+    this command from Bash) falls back to Claude Code's user settings.json.
+    """
+    for env in GATE_OPTION_ENVS:
+        if env in os.environ:
+            return _parse_project_list(os.environ[env])
+    try:
+        with open(os.path.expanduser("~/.claude/settings.json"),
+                  encoding="utf-8") as fh:
+            settings = json.load(fh)
+    except (OSError, ValueError):
+        return []
+    projects = []
+    for plugin_id, cfg in (settings.get("pluginConfigs") or {}).items():
+        # Plugin ids may carry a marketplace suffix, e.g. "olivia-mode@repo".
+        if plugin_id.split("@", 1)[0] != "olivia-mode" or not isinstance(cfg, dict):
+            continue
+        options = cfg.get("options") or {}
+        projects.extend(_parse_project_list(options.get("gated_projects")))
+    return projects
+
+
+def cmd_gate(args):
+    """Report whether a directory is opted into the write gate."""
+    project = _canon(args.cwd)
+    projects = _gated_projects()
+    print(json.dumps({
+        "gated": project in projects,
+        "project": project,
+        "gatedProjects": projects,
+    }, indent=2))
+
+
+def cmd_authorize(args):
+    """Is writing --file authorized by a completed interview for --cwd?
+
+    Prints a one-object JSON verdict. The reason strings are written for the
+    agent that gets them back through the gate's stderr -- each one is a
+    recovery instruction, not a log line.
+    """
+    cwd = os.path.abspath(args.cwd)
+    path = args.file
+    if not os.path.isabs(path):
+        path = os.path.join(cwd, path)
+    rel = os.path.relpath(os.path.abspath(path), cwd)
+
+    declaring = [s for s in _sessions_for_cwd(cwd)
+                 if _matches_deliverable(rel, s.get("deliverables"))]
+    complete = [s for s in declaring if s["complete"]]
+
+    if complete:
+        # Collision rule: prefer the most recently updated completed session
+        # (the list is already newest-first); surface the rest as alternates.
+        chosen = complete[0]
+        verdict = {
+            "authorized": True,
+            "session": chosen["path"],
+            "title": chosen["title"],
+        }
+        if len(complete) > 1:
+            verdict["alternates"] = [s["title"] for s in complete[1:]]
+    elif declaring:
+        s = declaring[0]
+        verdict = {
+            "authorized": False,
+            "reason": (
+                "matched '%s' but %d questions pending; resume that interview "
+                "(session file %s) with the olivia-mode skill and complete it, "
+                "then retry this write" % (s["title"], s["pending"], s["path"])
+            ),
+        }
+    else:
+        verdict = {
+            "authorized": False,
+            "reason": (
+                "no session declares this path; author a tree with a "
+                "deliverables entry for it and complete the interview with "
+                "the olivia-mode skill before writing this document"
+            ),
+        }
+
+    print(json.dumps(verdict, indent=2))
+    sys.exit(0 if verdict["authorized"] else 1)
 
 
 def cmd_serve(args):
@@ -1167,6 +1331,21 @@ def main(argv=None):
                       help="working dir to match (default: CWD)")
     p_ls.add_argument("--all", action="store_true", help="list every session")
     p_ls.set_defaults(func=cmd_sessions)
+
+    p_auth = sub.add_parser(
+        "authorize",
+        help="check whether a completed interview authorizes writing a file")
+    p_auth.add_argument("--cwd", default=os.getcwd(),
+                        help="working dir the write happens in (default: CWD)")
+    p_auth.add_argument("--file", required=True,
+                        help="path being written (absolute, or relative to --cwd)")
+    p_auth.set_defaults(func=cmd_authorize)
+
+    p_gate = sub.add_parser(
+        "gate", help="report whether a project is opted into the write gate")
+    p_gate.add_argument("--cwd", default=os.getcwd(),
+                        help="project directory to check (default: CWD)")
+    p_gate.set_defaults(func=cmd_gate)
 
     args = ap.parse_args(argv)
     args.func(args)

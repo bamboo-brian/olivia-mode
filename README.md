@@ -2,9 +2,11 @@
 
 Named after the very best question asker I know.
 
-A Claude Code **plugin** (a single skill) for interviewing you about a plan or
-design until you reach a shared understanding — without dumping a hundred
-questions into the chat.
+A Claude Code **plugin** for interviewing you about a plan or design until you
+reach a shared understanding — without dumping a hundred questions into the
+chat. Alongside the interview skill it ships a **Planning Facilitator** output
+style and a **PreToolUse write gate** that together keep an agent from drafting
+deliverable documents it never earned the answers for.
 
 The agent builds a **branching decision tree** of questions (each with 1–2
 recommended answers and a rationale), then launches a tiny local web app you step
@@ -52,6 +54,68 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/olivia_server.py" sessions --cwd "$PWD"
 and relaunches the server on the unfinished one. Only unanswered questions are
 offered.
 
+## Deliverables and the write gate
+
+Every interview tree declares, up front, the deliverable path(s) it authorizes
+— a `deliverables` list of paths or globs relative to the repo, e.g.
+`["docs/specs/payments-ledger.md"]` or `["docs/plans/auth-*.md"]`. Declaring it
+at tree-authoring time is deliberate: the binding is part of the plan, not
+something the agent retro-fits afterwards to satisfy the gate.
+
+The plugin registers a **PreToolUse hook** (`hooks/olivia_gate.py`) on the
+`Write` tool. The gate is **opt-in per project**: when you enable the plugin,
+Claude Code prompts for a **Gated projects** list (the plugin's
+`gated_projects` user config — change it any time via `/plugin`). Only
+projects whose directory (`CLAUDE_PROJECT_DIR`) is on that list are gated;
+that setting is the single source of truth, and you can check any directory
+against it with:
+
+```
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/olivia_server.py" gate --cwd "$PWD"
+```
+
+The Planning Facilitator output style has the agent run that check when
+planning work starts, and tell you if the current project isn't gated — so
+discovery doesn't depend on reading this README.
+
+Projects not on the list are never touched. Inside a listed project,
+**creating any markdown file** is gated (override the file pattern with
+`OLIVIA_GATE_PATTERN`). Modifying a document that already exists is always
+allowed — revision never needs an interview, only bringing a new deliverable
+into existence does. On each gated creation the hook asks the server:
+
+```
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/olivia_server.py" authorize --cwd "$PWD" --file <path>
+```
+
+which answers one question — does any **completed** session's `deliverables`
+match this path?
+
+```json
+{"authorized": true, "session": "~/.olivia-mode/sessions/...json", "title": "Payments ledger spec"}
+{"authorized": false, "reason": "matched 'Payments ledger spec' but 3 questions pending; ..."}
+{"authorized": false, "reason": "no session declares this path; author a tree with a deliverables entry ..."}
+```
+
+An unauthorized write is blocked, and the `reason` is fed back to the agent as
+its recovery instruction. If two completed sessions match one path, the most
+recently completed wins (the others are listed as `alternates`).
+
+The **Planning Facilitator** output style (`output-styles/planning-facilitator.md`)
+is the other half: it directs the agent to treat Olivia interviews as its
+primary elicitation mechanism and never to fill unstated requirements with
+assumptions. Select it via `/config` → **Output style**, or set
+`"outputStyle": "Planning Facilitator"` in the project's
+`.claude/settings.local.json`. You don't have to remember to: a SessionStart
+hook (`hooks/olivia_style_nudge.py`) notices when a session starts in a
+gated project without the style selected and has the agent offer to enable
+it — and stays silent everywhere else, or once the project has made an
+explicit style choice.
+
+The interview skill itself still works standalone — an interview run purely
+for shared understanding needs no document at all and declares
+`"deliverables": []`.
+
 ## Requirements
 
 Python 3 standard library only. No dependencies to install.
@@ -59,9 +123,13 @@ Python 3 standard library only. No dependencies to install.
 ## Layout
 
 ```
-SKILL.md                    agent instructions (the skill entry point)
-scripts/olivia_server.py    the web server / runtime + `sessions` discovery
-references/tree-schema.md    session JSON format + worked example
+SKILL.md                                   agent instructions (the skill entry point)
+scripts/olivia_server.py                   the web server / runtime + `sessions`, `authorize`, `gate`
+references/tree-schema.md                  session JSON format + worked example
+hooks/hooks.json                           registers the plugin's hooks
+hooks/olivia_gate.py                       PreToolUse gate: blocks unauthorized document creation
+hooks/olivia_style_nudge.py                SessionStart nudge: offers the output style in gated projects
+output-styles/planning-facilitator.md      interview-first planning output style
 ```
 
 Session files are written to `~/.olivia-mode/sessions/` (see
