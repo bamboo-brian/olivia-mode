@@ -18,7 +18,10 @@ instead of asking it.**
 ## The pieces
 
 - `scripts/olivia_server.py` — a stdlib-only web server (the whole runtime),
-  plus a `sessions` discovery command.
+  plus a `sessions` discovery command, an `authorize` command that reports
+  whether a completed interview covers writing a given file (used by the
+  plugin's PreToolUse gate; you can also run it yourself to check), and a
+  `gate` command that reports whether a project has opted into that gate.
 - `references/tree-schema.md` — the session JSON format. **Read this before
   authoring a tree.**
 - `~/.olivia-mode/sessions/` — the **known directory** where every session file
@@ -45,15 +48,25 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/olivia_server.py" sessions --cwd "$PWD"
 ```
 
 This prints JSON: `matches` (sessions whose stored `cwd` is this directory, each
-with `path`, `title`, `answered`/`pending`/`complete` counts) and `newPath` (the
-file to use for a fresh session).
+with `path`, `title`, `deliverables`, and `answered`/`pending`/`complete`
+counts) and `newPath` (the file to use for a fresh session).
 
 - If a match is **not `complete`** and fits the current request, offer to
   **resume** it — skip to step 6 (Resume) with its `path`.
 - Otherwise start fresh: use `newPath` as the file for the new session.
 
 ### 2. Build the tree (new session only)
-Generate as many questions as it takes to reach full understanding. For each:
+Every tree declares the deliverable path(s) this interview authorizes: a
+top-level **`deliverables`** list of paths or globs relative to the session's
+`cwd` (e.g. `["docs/specs/payments-ledger.md"]`, or `["docs/plans/auth-*.md"]`
+when the exact filename depends on interview answers). Declaring it up front
+is deliberate — the binding is part of the plan, not something retro-fitted
+later to satisfy the write gate. An interview that exists purely to reach
+shared understanding, with no document artifact, declares `"deliverables": []`
+— the interview itself works exactly the same either way.
+
+Then generate as many questions as it takes to reach full understanding. For
+each:
 - Give it 1–2 **recommended answers**, each with a short rationale.
 - Anticipate the **follow-up questions** each recommended answer would raise, and
   add them as branch children keyed to that recommendation (`parentId` +
@@ -67,8 +80,8 @@ Generate as many questions as it takes to reach full understanding. For each:
 
 Write the tree to the `newPath` from step 1, following `references/tree-schema.md`.
 Include `"cwd": "<absolute working directory>"` at the top level so the session
-stays tied to this repo, and a top-level `"references"` object with any glossary
-entries.
+stays tied to this repo, the `"deliverables"` list, and a top-level
+`"references"` object with any glossary entries.
 
 ### 3. Launch the server with the `Monitor` tool
 The server is a long-running process that emits one `OLIVIA_EVENT` line per
@@ -119,7 +132,9 @@ events you can do other work; the next notification will bring you back.
 When you see `OLIVIA_EVENT {"type":"done"}` (the user clicked **Done**) the
 server exits and the monitor ends. Read the final session file (the `file` path
 from the `ready` event) and use the fully-answered tree to inform the work the
-interview was for. Hand the answered tree back to the user.
+interview was for. Hand the answered tree back to the user. Once every question
+is answered or resolved, the session is *complete* and its `deliverables`
+paths become writable through the plugin's authorization gate.
 
 ### 6. Resume
 To resume, **skip step 2** and relaunch `serve` on an existing session's `path`

@@ -12,22 +12,46 @@ branches and depth-first traversal simple.
   "cwd": "/Users/you/repos/project",
   "created": "2026-06-30T12:00:00+00:00",
   "updated": "2026-06-30T12:34:00+00:00",
+  "deliverables": ["docs/specs/payments-ledger.md"],
   "references": { "R-18": "Run-time data consistency ...", "cache-service": "..." },
   "questions": [ /* Question objects */ ]
 }
 ```
 
-| Field        | Type   | Notes                                                           |
-| ------------ | ------ | --------------------------------------------------------------- |
-| `title`      | string | Shown as the page heading.                                      |
-| `cwd`        | string | Absolute working directory this session belongs to. Ties the session to its repo for discovery/resume; the server backfills it from `--cwd` if omitted. |
-| `created`    | string | ISO-8601. The server fills this if omitted.                     |
-| `updated`    | string | ISO-8601. The server re-stamps this on every write.             |
-| `references` | object | Optional glossary; see [References](#references). Any occurrence of a key in Olivia-authored text becomes a hover tooltip in the web UI. |
-| `questions`  | array  | Flat list; nesting is expressed via `parentId`.                 |
+| Field          | Type   | Notes                                                           |
+| -------------- | ------ | --------------------------------------------------------------- |
+| `title`        | string | Shown as the page heading.                                      |
+| `cwd`          | string | Absolute working directory this session belongs to. Ties the session to its repo for discovery/resume; the server backfills it from `--cwd` if omitted. |
+| `created`      | string | ISO-8601. The server fills this if omitted.                     |
+| `updated`      | string | ISO-8601. The server re-stamps this on every write.             |
+| `deliverables` | array  | **Required at authoring time.** Paths or globs, relative to `cwd`, of the document(s) this interview authorizes; see [Deliverables](#deliverables). Use `[]` for an interview that produces no document. |
+| `references`   | object | Optional glossary; see [References](#references). Any occurrence of a key in Olivia-authored text becomes a hover tooltip in the web UI. |
+| `questions`    | array  | Flat list; nesting is expressed via `parentId`.                 |
 
 Sessions are stored in `~/.olivia-mode/sessions/` (root overridable via
 `OLIVIA_MODE_HOME`), one file per interview, named after the `cwd`.
+
+## Deliverables
+
+Every tree declares, up front, the deliverable path(s) the interview
+authorizes — a list of paths or globs **relative to the session's `cwd`**:
+
+```json
+"deliverables": ["docs/specs/payments-ledger.md"]
+```
+
+Declaring this at tree-authoring time is deliberate: the binding is part of
+the plan, not something retro-fitted after the fact to satisfy the write
+gate. The `authorize` command (and the plugin's PreToolUse hook behind it)
+only approves writing a file when a **completed** session lists a matching
+pattern here.
+
+- Use a glob when the exact filename depends on interview answers:
+  `"deliverables": ["docs/plans/auth-*.md"]`.
+- A plan-type interview that produces several documents lists several
+  patterns.
+- An interview run purely for shared understanding, with no document
+  artifact, declares `"deliverables": []` — the field is still present.
 
 ## Question object
 
@@ -113,6 +137,7 @@ Two roots; the first has a branch that only appears if the user picks `r1`.
   "title": "New caching layer",
   "cwd": "/Users/you/repos/project",
   "created": "2026-06-30T12:00:00+00:00",
+  "deliverables": ["docs/plans/caching-layer.md"],
   "questions": [
     {
       "id": "q1",
